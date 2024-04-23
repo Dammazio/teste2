@@ -1,0 +1,722 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="initial-scale=1, user-scalable=no, maximum-scale=1, width=device-width">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <link rel="stylesheet" href="css/leaflet.css">
+    <link rel="stylesheet" href="css/L.Control.Layers.Tree.css">
+    <link rel="stylesheet" href="css/L.Control.Locate.min.css">
+    <link rel="stylesheet" href="css/qgis2web.css">
+    <link rel="stylesheet" href="css/fontawesome-all.min.css">
+    <link rel="stylesheet" href="css/leaflet-control-geocoder.Geocoder.css">
+    <link rel="stylesheet" href="css/leaflet-measure.css">
+    <style>
+        html, body, #map {
+            width: 100%;
+            height: 100%;
+            padding: 0;
+            margin: 0;
+        }
+        .leaflet-control-custom {
+            background-color: white;
+            border: 2px solid #666;
+            border-radius: 5px;
+            box-shadow: 0 1px 5px rgba(0,0,0,0.2);
+            width: 34px;
+            height: 34px;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.4);
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: 15% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 25%;
+            text-align: center;
+        }
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+        }
+        .close:hover,
+        .close:focus {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
+    </style>
+    <title>Sunlight Workshop Demo</title>
+</head>
+<body>
+    <div id="map"></div>
+    <!-- Modal HTML -->
+    <div id="interpolationModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Deseja os resultados da interpolação?</h2>
+            <p>Utilize sua localização atual ou insira uma coordenada específica.</p>
+            <button onclick="useCurrentLocation()">Usar Localização Atual</button>
+            <input type="text" id="coordinateInput" placeholder="Digite a coordenada ou local aqui">
+            <button onclick="useCustomLocation()">Confirmar Coordenada</button>
+        </div>
+    </div>
+    <script src="js/leaflet.js"></script>
+    <script src="js/L.Control.Layers.Tree.min.js"></script>
+    <script src="js/L.Control.Locate.min.js"></script>
+    <script src="js/leaflet.rotatedMarker.js"></script>
+    <script src="js/leaflet.pattern.js"></script>
+    <script src="js/leaflet-hash.js"></script>
+    <script src="js/Autolinker.min.js"></script>
+    <script src="js/rbush.min.js"></script>
+    <script src="js/labelgun.min.js"></script>
+    <script src="js/labels.js"></script>
+    <script src="js/leaflet-control-geocoder.Geocoder.js"></script>
+    <script src="js/leaflet-measure.js"></script>
+    <script src="js/qgis2web_expressions.js"></script>
+    <script src="data/USCitiesPopulation_1.js"></script>
+    <script src="data/USCitiesSunsetTime_2.js"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            // Verifica se o mapa já foi inicializado
+            if (!window.map) {
+                window.map = L.map('map', {
+                    zoomControl: true,
+                    maxZoom: 28,
+                    minZoom: 1,
+                    maxBounds: L.latLngBounds(L.latLng(-89.98155760646617, -180), L.latLng(89.99346179538875, 180))
+                }).setView([51.505, -0.09], 13);
+        
+                // Adicionar controles personalizados e outras configurações aqui
+        
+                var customControl = L.Control.extend({
+                    options: {
+                        position: 'topleft'
+                    },
+                    onAdd: function (map) {
+                        var container = L.DomUtil.create('div', 'leaflet-control-custom');
+                        container.style.backgroundColor = 'white';
+                        container.style.width = '34px';
+                        container.style.height = '34px';
+                        container.innerHTML = '<i class="fa fa-info-circle" style="line-height:34px; text-align:center; display:block; color:black; font-size:16px;"></i>';
+                        container.style.cursor = 'pointer';
+                        container.onclick = function() {
+                            document.getElementById('interpolationModal').style.display = 'block';
+                        };
+                        return container;
+                    }
+                });
+                map.addControl(new customControl());
+            }
+        
+            // Configuração dos modais
+            var modal = document.getElementById("interpolationModal");
+            var span = document.getElementsByClassName("close")[0];
+            span.onclick = function() { modal.style.display = "none"; };
+            window.onclick = function(event) {
+                if (event.target == modal) {
+                    modal.style.display = "none";
+                }
+            };
+        
+            window.useCurrentLocation = function() {
+                if (navigator.geolocation) {
+                    navigator.geolocation.getCurrentPosition(function(position) {
+                        alert('Localização atual: ' + position.coords.latitude + ', ' + position.coords.longitude);
+                    });
+                } else {
+                    alert("Geolocalização não é suportada por este navegador.");
+                }
+            };
+        
+            window.useCustomLocation = function() {
+                var coords = document.getElementById("coordinateInput").value;
+                alert('Coordenadas inseridas: ' + coords);
+            };
+        });
+var highlightLayer;
+        function highlightFeature(e) {
+            highlightLayer = e.target;
+
+            if (e.target.feature.geometry.type === 'LineString' || e.target.feature.geometry.type === 'MultiLineString') {
+              highlightLayer.setStyle({
+                color: '#e31a1c',
+              });
+            } else {
+              highlightLayer.setStyle({
+                fillColor: '#e31a1c',
+                fillOpacity: 1
+              });
+            }
+        }
+        var southWest = L.latLng(-89.98155760646617, -180), // Defina a latitude e longitude do canto sudoeste
+    northEast = L.latLng(89.99346179538875, 180),  // Defina a latitude e longitude do canto nordeste
+    bounds = L.latLngBounds(southWest, northEast); // Cria os limites baseados nos pontos acima
+
+var map = L.map('map', {
+    zoomControl: true,
+    maxZoom: 28,
+    minZoom: 3,
+    maxBounds: bounds,  // Aplica os limites para panning
+    maxBoundsViscosity: 1.0  // Impede o usuário de arrastar fora dos limites em qualquer medida
+        }).fitBounds([[-8.64136061011593,-127.4795257299367],[50.72764100141083,-35.44380667784349]]);
+        var customControl = L.Control.extend({
+            options: {
+                position: 'topleft'
+            },
+            onAdd: function (map) {
+                var container = L.DomUtil.create('div', 'leaflet-control-custom');
+                container.style.backgroundColor = 'white';
+                container.style.width = '34px';
+                container.style.height = '34px';
+                container.innerHTML = '<i class="fa fa-info-circle" style="line-height:34px; text-align:center; display:block; color:black; font-size:16px;"></i>';
+                container.style.cursor = 'pointer';
+                container.onclick = function() {
+                    document.getElementById('interpolationModal').style.display = 'block';
+                };
+                return container;
+            }
+        });
+        map.addControl(new customControl());
+    ;
+        var hash = new L.Hash(map);
+        map.attributionControl.setPrefix('<a href="https://github.com/tomchadwin/qgis2web" target="_blank">qgis2web</a> &middot; <a href="https://leafletjs.com" title="A JS library for interactive maps">Leaflet</a> &middot; <a href="https://qgis.org">QGIS</a>');
+        var autolinker = new Autolinker({truncate: {length: 30, location: 'smart'}});
+        function removeEmptyRowsFromPopupContent(content, feature) {
+         var tempDiv = document.createElement('div');
+         tempDiv.innerHTML = content;
+         var rows = tempDiv.querySelectorAll('tr');
+         for (var i = 0; i < rows.length; i++) {
+             var td = rows[i].querySelector('td.visible-with-data');
+             var key = td ? td.id : '';
+             if (td && td.classList.contains('visible-with-data') && feature.properties[key] == null) {
+                 rows[i].parentNode.removeChild(rows[i]);
+             }
+         }
+         return tempDiv.innerHTML;
+        }
+        document.querySelector(".leaflet-popup-pane").addEventListener("load", function(event) {
+          var tagName = event.target.tagName,
+            popup = map._popup;
+          // Also check if flag is already set.
+          if (tagName === "IMG" && popup && !popup._updated) {
+            popup._updated = true; // Set flag to prevent looping.
+            popup.update();
+          }
+        }, true);
+        L.control.locate({locateOptions: {maxZoom: 19}}).addTo(map);
+        var measureControl = new L.Control.Measure({
+            position: 'topleft',
+            primaryLengthUnit: 'meters',
+            secondaryLengthUnit: 'kilometers',
+            primaryAreaUnit: 'sqmeters',
+            secondaryAreaUnit: 'hectares'
+        });
+        measureControl.addTo(map);
+        document.getElementsByClassName('leaflet-control-measure-toggle')[0]
+        .innerHTML = '';
+        document.getElementsByClassName('leaflet-control-measure-toggle')[0]
+        .className += ' fas fa-ruler';
+        var bounds_group = new L.featureGroup([]);
+        function setBounds() {
+        }
+        map.createPane('pane_GoogleMaps_0');
+        map.getPane('pane_GoogleMaps_0').style.zIndex = 400;
+        var layer_GoogleMaps_0 = L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
+            pane: 'pane_GoogleMaps_0',
+            opacity: 1.0,
+            attribution: '',
+            minZoom: 1,
+            maxZoom: 28,
+        });
+        layer_GoogleMaps_0;
+        map.addLayer(layer_GoogleMaps_0);
+        function pop_USCitiesPopulation_1(feature, layer) {
+            layer.on({
+                mouseout: function(e) {
+                    for (var i in e.target._eventParents) {
+                        if (typeof e.target._eventParents[i].resetStyle === 'function') {
+                            e.target._eventParents[i].resetStyle(e.target);
+                        }
+                    }
+                },
+                mouseover: highlightFeature,
+            });
+            var popupContent = '<table>\
+                    <tr>\
+                        <th scope="row">city</th>\
+                        <td>' + (feature.properties['city'] !== null ? autolinker.link(feature.properties['city'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">State</th>\
+                        <td>' + (feature.properties['state_id'] !== null ? autolinker.link(feature.properties['state_id'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Population</th>\
+                        <td>' + (feature.properties['population'] !== null ? autolinker.link(feature.properties['population'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Pop.Dsensity</th>\
+                        <td>' + (feature.properties['density'] !== null ? autolinker.link(feature.properties['density'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">TimeZone</th>\
+                        <td>' + (feature.properties['timezone'] !== null ? autolinker.link(feature.properties['timezone'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">SunRise</th>\
+                        <td>' + (feature.properties['sunrise_sh'] !== null ? autolinker.link(feature.properties['sunrise_sh'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Sunset</th>\
+                        <td>' + (feature.properties['sunset_sho'] !== null ? autolinker.link(feature.properties['sunset_sho'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Daylight (hours)</th>\
+                        <td>' + (feature.properties['daylight'] !== null ? autolinker.link(feature.properties['daylight'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Maximum Population</th>\
+                        <td>' + (feature.properties['max_pop'] !== null ? autolinker.link(feature.properties['max_pop'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Latest Sunset time</th>\
+                        <td>' + (feature.properties['max_sunset'] !== null ? autolinker.link(feature.properties['max_sunset'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                </table>';
+            layer.bindPopup(popupContent, {maxHeight: 400});
+            var popup = layer.getPopup();
+            var content = popup.getContent();
+            var updatedContent = removeEmptyRowsFromPopupContent(content, feature);
+            popup.setContent(updatedContent);
+        }
+
+        function style_USCitiesPopulation_1_0(feature) {
+            if (feature.properties['population'] >= 49848.000000 && feature.properties['population'] <= 195805.000000 ) {
+                return {
+                pane: 'pane_USCitiesPopulation_1',
+                radius: 4.0,
+                opacity: 1,
+                color: 'rgba(50,87,128,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 2.0,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(72,123,182,1.0)',
+                interactive: true,
+            }
+            }
+            if (feature.properties['population'] >= 195805.000000 && feature.properties['population'] <= 518012.000000 ) {
+                return {
+                pane: 'pane_USCitiesPopulation_1',
+                radius: 7.42858,
+                opacity: 1,
+                color: 'rgba(50,87,128,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 2.0,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(72,123,182,1.0)',
+                interactive: true,
+            }
+            }
+            if (feature.properties['population'] >= 518012.000000 && feature.properties['population'] <= 1203230.000000 ) {
+                return {
+                pane: 'pane_USCitiesPopulation_1',
+                radius: 10.85714,
+                opacity: 1,
+                color: 'rgba(50,87,128,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 2.0,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(72,123,182,1.0)',
+                interactive: true,
+            }
+            }
+            if (feature.properties['population'] >= 1203230.000000 && feature.properties['population'] <= 2230722.000000 ) {
+                return {
+                pane: 'pane_USCitiesPopulation_1',
+                radius: 14.28572,
+                opacity: 1,
+                color: 'rgba(50,87,128,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 2.0,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(72,123,182,1.0)',
+                interactive: true,
+            }
+            }
+            if (feature.properties['population'] >= 2230722.000000 && feature.properties['population'] <= 4219697.000000 ) {
+                return {
+                pane: 'pane_USCitiesPopulation_1',
+                radius: 17.71428,
+                opacity: 1,
+                color: 'rgba(50,87,128,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 2.0,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(72,123,182,1.0)',
+                interactive: true,
+            }
+            }
+            if (feature.properties['population'] >= 4219697.000000 && feature.properties['population'] <= 6445545.000000 ) {
+                return {
+                pane: 'pane_USCitiesPopulation_1',
+                radius: 21.1428,
+                opacity: 1,
+                color: 'rgba(50,87,128,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 2.0,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(72,123,182,1.0)',
+                interactive: true,
+            }
+            }
+            if (feature.properties['population'] >= 6445545.000000 && feature.properties['population'] <= 12750807.000000 ) {
+                return {
+                pane: 'pane_USCitiesPopulation_1',
+                radius: 24.5714,
+                opacity: 1,
+                color: 'rgba(50,87,128,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 2.0,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(72,123,182,1.0)',
+                interactive: true,
+            }
+            }
+            if (feature.properties['population'] >= 12750807.000000 && feature.properties['population'] <= 18713220.000000 ) {
+                return {
+                pane: 'pane_USCitiesPopulation_1',
+                radius: 28.0,
+                opacity: 1,
+                color: 'rgba(50,87,128,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 2.0,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(72,123,182,1.0)',
+                interactive: true,
+            }
+            }
+        }
+        map.createPane('pane_USCitiesPopulation_1');
+        map.getPane('pane_USCitiesPopulation_1').style.zIndex = 401;
+        map.getPane('pane_USCitiesPopulation_1').style['mix-blend-mode'] = 'normal';
+        var layer_USCitiesPopulation_1 = new L.geoJson(json_USCitiesPopulation_1, {
+            attribution: '',
+            interactive: true,
+            dataVar: 'json_USCitiesPopulation_1',
+            layerName: 'layer_USCitiesPopulation_1',
+            pane: 'pane_USCitiesPopulation_1',
+            onEachFeature: pop_USCitiesPopulation_1,
+            pointToLayer: function (feature, latlng) {
+                var context = {
+                    feature: feature,
+                    variables: {}
+                };
+                return L.circleMarker(latlng, style_USCitiesPopulation_1_0(feature));
+            },
+        });
+        bounds_group.addLayer(layer_USCitiesPopulation_1);
+        function pop_USCitiesSunsetTime_2(feature, layer) {
+            layer.on({
+                mouseout: function(e) {
+                    for (var i in e.target._eventParents) {
+                        if (typeof e.target._eventParents[i].resetStyle === 'function') {
+                            e.target._eventParents[i].resetStyle(e.target);
+                        }
+                    }
+                },
+                mouseover: highlightFeature,
+            });
+            var popupContent = '<table>\
+                    <tr>\
+                        <th scope="row">City</th>\
+                        <td>' + (feature.properties['city'] !== null ? autolinker.link(feature.properties['city'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">State</th>\
+                        <td>' + (feature.properties['state_id'] !== null ? autolinker.link(feature.properties['state_id'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Population</th>\
+                        <td>' + (feature.properties['population'] !== null ? autolinker.link(feature.properties['population'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Pop.Dsensity</th>\
+                        <td>' + (feature.properties['density'] !== null ? autolinker.link(feature.properties['density'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">TimeZone</th>\
+                        <td>' + (feature.properties['timezone'] !== null ? autolinker.link(feature.properties['timezone'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">SunRise</th>\
+                        <td>' + (feature.properties['sunrise_sh'] !== null ? autolinker.link(feature.properties['sunrise_sh'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Sunset</th>\
+                        <td>' + (feature.properties['sunset_sho'] !== null ? autolinker.link(feature.properties['sunset_sho'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Daylight (hours)</th>\
+                        <td>' + (feature.properties['daylight'] !== null ? autolinker.link(feature.properties['daylight'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Maximum Population</th>\
+                        <td>' + (feature.properties['max_pop'] !== null ? autolinker.link(feature.properties['max_pop'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                    <tr>\
+                        <th scope="row">Latest Sunset time</th>\
+                        <td>' + (feature.properties['max_sunset'] !== null ? autolinker.link(feature.properties['max_sunset'].toLocaleString()) : '') + '</td>\
+                    </tr>\
+                </table>';
+            layer.bindPopup(popupContent, {maxHeight: 400});
+            var popup = layer.getPopup();
+            var content = popup.getContent();
+            var updatedContent = removeEmptyRowsFromPopupContent(content, feature);
+            popup.setContent(updatedContent);
+        }
+
+        function style_USCitiesSunsetTime_2_0(feature) {
+            switch(String(feature.properties['max_sunset'])) {
+                case '4:15 pm':
+                    return {
+                pane: 'pane_USCitiesSunsetTime_2',
+                radius: 8.0,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(0,0,4,1.0)',
+                interactive: true,
+            }
+                    break;
+                case '4:30 pm':
+                    return {
+                pane: 'pane_USCitiesSunsetTime_2',
+                radius: 8.0,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(29,16,71,1.0)',
+                interactive: true,
+            }
+                    break;
+                case '4:45 pm':
+                    return {
+                pane: 'pane_USCitiesSunsetTime_2',
+                radius: 8.0,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(80,18,123,1.0)',
+                interactive: true,
+            }
+                    break;
+                case '5:00 pm':
+                    return {
+                pane: 'pane_USCitiesSunsetTime_2',
+                radius: 8.0,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(130,37,129,1.0)',
+                interactive: true,
+            }
+                    break;
+                case '5:15 pm':
+                    return {
+                pane: 'pane_USCitiesSunsetTime_2',
+                radius: 8.0,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(182,55,122,1.0)',
+                interactive: true,
+            }
+                    break;
+                case '5:30 pm':
+                    return {
+                pane: 'pane_USCitiesSunsetTime_2',
+                radius: 8.0,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(230,81,100,1.0)',
+                interactive: true,
+            }
+                    break;
+                case '5:45 pm':
+                    return {
+                pane: 'pane_USCitiesSunsetTime_2',
+                radius: 8.0,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(251,135,97,1.0)',
+                interactive: true,
+            }
+                    break;
+                case '5:50 pm':
+                    return {
+                pane: 'pane_USCitiesSunsetTime_2',
+                radius: 8.0,
+                opacity: 1,
+                color: 'rgba(35,35,35,1.0)',
+                dashArray: '',
+                lineCap: 'butt',
+                lineJoin: 'miter',
+                weight: 1,
+                fill: true,
+                fillOpacity: 1,
+                fillColor: 'rgba(254,195,135,1.0)',
+                interactive: true,
+            }
+                    break;
+            }
+        }
+        map.createPane('pane_USCitiesSunsetTime_2');
+        map.getPane('pane_USCitiesSunsetTime_2').style.zIndex = 402;
+        map.getPane('pane_USCitiesSunsetTime_2').style['mix-blend-mode'] = 'normal';
+        var layer_USCitiesSunsetTime_2 = new L.geoJson(json_USCitiesSunsetTime_2, {
+            attribution: '',
+            interactive: true,
+            dataVar: 'json_USCitiesSunsetTime_2',
+            layerName: 'layer_USCitiesSunsetTime_2',
+            pane: 'pane_USCitiesSunsetTime_2',
+            onEachFeature: pop_USCitiesSunsetTime_2,
+            pointToLayer: function (feature, latlng) {
+                var context = {
+                    feature: feature,
+                    variables: {}
+                };
+                return L.circleMarker(latlng, style_USCitiesSunsetTime_2_0(feature));
+            },
+        });
+        bounds_group.addLayer(layer_USCitiesSunsetTime_2);
+        map.addLayer(layer_USCitiesSunsetTime_2);
+            var title = new L.Control();
+            title.onAdd = function (map) {
+                this._div = L.DomUtil.create('div', 'info');
+                this.update();
+                return this._div;
+            };
+            title.update = function () {
+                this._div.innerHTML = '<h2>Sunlight Workshop Demo</h2>';
+            };
+            title.addTo(map);
+            var abstract = new L.Control({'position':'bottomright'});
+            abstract.onAdd = function (map) {
+                this._div = L.DomUtil.create('div',
+                'leaflet-control abstract');
+                this._div.id = 'abstract'
+
+                    abstract.show();
+                    return this._div;
+                };
+                abstract.show = function () {
+                    this._div.classList.remove("abstract");
+                    this._div.classList.add("abstractUncollapsed");
+                    this._div.innerHTML = 'This is a web map designed for a workshop in March 2022 to show sunset times and population in the 990 largesst cities in the contigous 48.';
+            };
+            abstract.addTo(map);
+        var osmGeocoder = new L.Control.Geocoder({
+            collapsed: true,
+            position: 'topleft',
+            text: 'Search',
+            title: 'Testing'
+        }).addTo(map);
+        document.getElementsByClassName('leaflet-control-geocoder-icon')[0]
+        .className += ' fa fa-search';
+        document.getElementsByClassName('leaflet-control-geocoder-icon')[0]
+        .title += 'Search for a place';
+        var baseMaps = {};
+        var overlaysTree = [
+            {label: 'U.S.Cities (Sunset Time)<br /><table><tr><td style="text-align: center;"><img src="legend/USCitiesSunsetTime_2_Before415pm0.png" /></td><td>Before 4:15 pm</td></tr><tr><td style="text-align: center;"><img src="legend/USCitiesSunsetTime_2_415430pm1.png" /></td><td>4:15-4:30 pm</td></tr><tr><td style="text-align: center;"><img src="legend/USCitiesSunsetTime_2_430445pm2.png" /></td><td>4:30-4:45 pm</td></tr><tr><td style="text-align: center;"><img src="legend/USCitiesSunsetTime_2_445500pm3.png" /></td><td>4:45-5:00 pm</td></tr><tr><td style="text-align: center;"><img src="legend/USCitiesSunsetTime_2_500515pm4.png" /></td><td>5:00-5:15 pm</td></tr><tr><td style="text-align: center;"><img src="legend/USCitiesSunsetTime_2_515530pm5.png" /></td><td>5:15-5:30 pm</td></tr><tr><td style="text-align: center;"><img src="legend/USCitiesSunsetTime_2_530545pm6.png" /></td><td>5:30-5:45 pm</td></tr><tr><td style="text-align: center;"><img src="legend/USCitiesSunsetTime_2_After545pm7.png" /></td><td>After 5:45 pm</td></tr></table>', layer: layer_USCitiesSunsetTime_2},
+            {label: 'U.S.Cities (Population)<br /><table><tr><td style="text-align: center;"><img src="legend/USCitiesPopulation_1_498481958050.png" /></td><td>49848 - 195805</td></tr><tr><td style="text-align: center;"><img src="legend/USCitiesPopulation_1_1958055180121.png" /></td><td>195805 - 518012</td></tr><tr><td style="text-align: center;"><img src="legend/USCitiesPopulation_1_51801212032302.png" /></td><td>518012 - 1203230</td></tr><tr><td style="text-align: center;"><img src="legend/USCitiesPopulation_1_120323022307223.png" /></td><td>1203230 - 2230722</td></tr><tr><td style="text-align: center;"><img src="legend/USCitiesPopulation_1_223072242196974.png" /></td><td>2230722 - 4219697</td></tr><tr><td style="text-align: center;"><img src="legend/USCitiesPopulation_1_421969764455455.png" /></td><td>4219697 - 6445545</td></tr><tr><td style="text-align: center;"><img src="legend/USCitiesPopulation_1_6445545127508076.png" /></td><td>6445545 - 12750807</td></tr><tr><td style="text-align: center;"><img src="legend/USCitiesPopulation_1_12750807187132207.png" /></td><td>12750807 - 18713220</td></tr></table>', layer: layer_USCitiesPopulation_1},
+            {label: "Google Maps", layer: layer_GoogleMaps_0},]
+        var lay = L.control.layers.tree(null, overlaysTree,{
+            //namedToggle: true,
+            //selectorBack: false,
+            //closedSymbol: '&#8862; &#x1f5c0;',
+            //openedSymbol: '&#8863; &#x1f5c1;',
+            //collapseAll: 'Collapse all',
+            //expandAll: 'Expand all',
+            collapsed: true,
+        });
+        lay.addTo(map);
+        setBounds();
+        </script>
+    </body>
+</html>
